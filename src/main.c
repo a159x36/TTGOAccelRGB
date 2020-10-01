@@ -1,4 +1,4 @@
-/* TTGO Demo example for 159236
+/* TTGO Demo example for WS2812B RGB LEDs and I2C MPU6050 Accelerometer for 159236
 
 */
 #include <driver/adc.h>
@@ -21,24 +21,10 @@
 #include "fonts.h"
 #include "graphics.h"
 #include "image_wave.h"
+#include "accelerometer.h"
 
-// put your wifi ssid name and password in here
-#define WIFI_SSID ""
-#define WIFI_PASSWORD ""
+#include "esp32_digital_led_lib.h"
 
-#define USE_WIFI 0
-#define DISPLAY_VOLTAGE 1
-#define DISPLAY_IMAGE_WAVE 1
-// this makes it faster but uses so much extra memory
-// that you can't use wifi at the same time
-#define COPY_IMAGE_TO_RAM 1
-/*
- This code has been modified from the espressif spi_master demo code
- it displays some demo graphics on the 240x135 LCD on a TTGO T-Display board. 
-*/
-
-// voltage reference calibration for Battery ADC
-uint32_t vref;
 
 const char *tag = "T Display";
 static time_t time_now;
@@ -58,7 +44,7 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
     
     uint64_t time=esp_timer_get_time();
     uint64_t timesince=time-lastkeytime;
-    //ets_printf("gpio_isr_handler %d %d %lld\n",gpio_num,val, timesince);
+ //   ets_printf("gpio_isr_handler %d %d %lld\n",gpio_num,val, timesince);
     // the buttons can be very bouncy so debounce by checking that it's been .5ms since the last
     // change and that it's pressed down
     if(timesince>500 && val==0) {
@@ -80,42 +66,7 @@ int get_input() {
     return key;
 }
 
-// Simple game of life demo
-void life() {
-    uint16_t linebuffer[display_width*2];
-    for(int i=0;i<(display_width*display_height)/2;i++) {
-        int x=rand()%display_width;
-        int y=rand()%display_height;
-        draw_pixel(x,y,-1);//rand() | 1);
-    }
-    int speed=1;
-    while (1) {
-        for(int y=0;y<display_height;y++) {
-            uint16_t *pline=frame_buffer+((y+display_height-1)%display_height)*display_width;
-            uint16_t *nline=frame_buffer+((y+display_height+1)%display_height)*display_width;
-            uint16_t *line=frame_buffer+y*display_width;
-            uint16_t *lb=linebuffer+(y%2)*display_width;
-            for(int x=1;x<display_width-1;x++) {
-                int n=0;
-                uint16_t v=line[x];
-                n=(pline[x-1]&1)+(pline[x]&1)+(pline[x+1]&1)+
-                (line[x-1]&1)+(line[x+1]&1)+
-                (nline[x-1]&1)+(nline[x]&1)+(nline[x+1]&1);
-                if(n>3 || n<2) v=0;
-                if(n==3) v=-1;//rand() | 1;
-                *lb++=v;
-            }
-            lb=linebuffer+((y+1)%2)*display_width;
-            memcpy(pline+speed,lb,display_width*2-speed*2+2);
-        }
-        flip_frame();
-        int key=get_input();
-        if(key==35) speed++;
-        if(key==0) return;
-    }
-}
-
-extern image_header  spaceship_image;
+extern image_header  bubble;
 typedef struct pos {
     int x;
     int y;
@@ -123,12 +74,10 @@ typedef struct pos {
     int colour;
 } pos;
 
-// simple spaceship and starfield demo
-void graphics_demo() {
-    int x=(display_width/2)<<8;
-    int y=display_height-spaceship_image.height/2;
-    int dx=256;
-    int ddx=10;
+// simple spirit level, drawing a bubble using accelerometer data
+void accelerometer_demo() {
+    int x;
+    int y;
     pos stars[100];
     for(int i=0;i<100;i++) {
         stars[i].x=rand()%display_width;
@@ -136,6 +85,7 @@ void graphics_demo() {
         stars[i].speed=rand()%512+64;
         stars[i].colour=rand();
     }
+    setFont(FONT_DEJAVU18);
     while(1) {
         cls(0);
         for(int i=0;i<100;i++) {
@@ -147,18 +97,18 @@ void graphics_demo() {
                 stars[i].speed=rand()%512+64;
             }
         }
-        draw_image(&spaceship_image, x>>8,y);
-        x=x+dx;
-        if(x<0 || x>=(display_width<<8)) {
-            dx=-dx;
-            x+=dx;
-        }
-        dx+=ddx;
-        if(dx<-500 || dx>500) {
-            ddx=-ddx;
-            dx+=ddx;
-        }
+        int16_t buf[7];
+        read_mpu6050(buf);
+        x=(display_width*buf[0])/(16384*2)+display_width/2;
+        y=-(display_height*buf[1])/(16384*2)+display_height/2;
+        draw_image(&bubble, x,y);
+
+        char str[16];
+        snprintf(str,16,"%.2f°C",buf[3]/340+36.53);
+        print_xy(str,1,1);
+
         flip_frame();
+
         int key=get_input();
         if(key==0) return;
     }
@@ -205,14 +155,12 @@ int demo_menu(int select) {
                     }
                 }
             }
-            print_xy("Demo Menu", 10, 10);
-            print_xy("Life",10,LASTY+24);
-            print_xy("Image Wave",10,LASTY+24);
-            print_xy("Spaceship",10,LASTY+24);
-            if(get_orientation())
-                print_xy("Landscape",10,LASTY+24);
-            else
-                print_xy("Portrait",10,LASTY+24);
+            print_xy("LED Menu", 10, 10);
+            print_xy("16 LED Ring",10,LASTY+24);
+            print_xy("16x16 Panel",10,LASTY+24);
+            print_xy("60 LED Strip",10,LASTY+24);
+            print_xy("Accelerometer",10,LASTY+24);
+            
             send_frame();
             // rotate cube
             for(int i=0;i<8;i++) {
@@ -242,174 +190,11 @@ int demo_menu(int select) {
         }
     }
 }
-// waving image demo showing time
-static void display() {
-    char buff[128];
-    int frame = 0;
-    int64_t current_time;
-    int64_t last_time = esp_timer_get_time();
-    while (1) {
-        frame++;
-        if (DISPLAY_IMAGE_WAVE)
-            image_wave_calc_lines(frame_buffer, 0, frame, display_height);
-        setFont(FONT_DEJAVU24);
-        if (DISPLAY_VOLTAGE) {
-            setFontColour(20, 0, 200);
-            uint32_t raw = adc1_get_raw((adc1_channel_t)ADC1_CHANNEL_6);
-            float battery_voltage =
-                ((float)raw / 4095.0) * 2.0 * 3.3 * (vref / 1000.0);
-            snprintf(buff, 128, "%.2fV", battery_voltage);
-            setFontColour(0, 0, 0);
-            print_xy(buff, 12, 12);
-            setFontColour(20, 200, 200);
-            print_xy(buff, 10, 10);
-        }
-
-        time(&time_now);
-        tm_info = localtime(&time_now);
-        struct timeval tv_now;
-        gettimeofday(&tv_now, NULL);
-
-        snprintf(buff, 128, "%2d:%02d:%02d:%03ld", tm_info->tm_hour,
-                 tm_info->tm_min, tm_info->tm_sec, tv_now.tv_usec / 1000);
-        setFontColour(0, 0, 0);
-        print_xy(buff, 12, 102);
-        setFontColour(200, 200, 200);
-        print_xy(buff, 10, 100);
-        flip_frame();
-        current_time = esp_timer_get_time();
-        if ((frame % 10) == 0) {
-            printf("FPS:%f\n", 1.0e6 / (current_time - last_time));
-            vTaskDelay(1);
-        }
-        last_time = current_time;
-        int key=get_input();
-        if(key==0) return;
-    }
-}
-#if USE_WIFI
-static EventGroupHandle_t wifi_event_group;
-#define DEFAULT_SCAN_LIST_SIZE 16
-/* The event group allows multiple bits for each event,
-   but we only care about one event - are we connected
-   to the AP with an IP? */
-const int CONNECTED_BIT = 0x00000001;
-static esp_err_t event_handler(void *ctx, system_event_t *event) {
-    //    uint16_t number = DEFAULT_SCAN_LIST_SIZE;
-    //    wifi_ap_record_t ap_info[DEFAULT_SCAN_LIST_SIZE];
-    //    uint16_t ap_count = 0;
-
-    switch (event->event_id) {
-        case SYSTEM_EVENT_STA_START:
-            esp_wifi_connect();
-            break;
-        case SYSTEM_EVENT_STA_CONNECTED:
-            ESP_LOGI(tag, "Connected:%s", event->event_info.connected.ssid);
-            break;
-        case SYSTEM_EVENT_STA_GOT_IP:
-            xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
-            break;
-
-        case SYSTEM_EVENT_STA_DISCONNECTED:
-            /* This is a workaround as ESP32 WiFi libs don't currently
-               auto-reassociate. */
-            esp_wifi_connect();
-            xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
-            break;
-        default:
-            break;
-    }
-    return ESP_OK;
-}
-
-//-------------------------------
-
-static void initialise_wifi(void) {
-    tcpip_adapter_init();
-    wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    wifi_config_t wifi_config = {
-        .sta =
-            {
-                .ssid = WIFI_SSID,
-                .password = WIFI_PASSWORD,
-            },
-    }; 
-    ESP_LOGI(tag, "Setting WiFi configuration SSID %s...",
-             wifi_config.sta.ssid);
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    /*
-    esp_wifi_scan_start(NULL,true);
-    #define DEFAULT_SCAN_LIST_SIZE 16
-    uint16_t number = DEFAULT_SCAN_LIST_SIZE;
-    wifi_ap_record_t ap_info[DEFAULT_SCAN_LIST_SIZE];
-    uint16_t ap_count = 0;
-    esp_wifi_scan_get_ap_records(&number, ap_info);
-    for (int i = 0; (i < DEFAULT_SCAN_LIST_SIZE) && (i < ap_count); i++) {
-        ESP_LOGI(tag, "SSID \t\t%s", ap_info[i].ssid);
-        ESP_LOGI(tag, "RSSI \t\t%d", ap_info[i].rssi);
-        ESP_LOGI(tag, "Channel \t\t%d\n", ap_info[i].primary);
-    }*/
-}
-
-//-------------------------------
-static void initialize_sntp(void) {
-    ESP_LOGI(tag, "Initializing SNTP");
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "pool.ntp.org");
-    sntp_init();
-}
-
-//--------------------------
-static int obtain_time(void) {
-    static char tmp_buff[64];
-    int res = 1;
-    ESP_LOGI(tag, "Wifi Init");
-    initialise_wifi();
-    ESP_LOGI(tag, "Wifi Initialised");
-    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true,
-                        portMAX_DELAY);
-
-    initialize_sntp();
-    ESP_LOGI(tag, "SNTP Initialised");
-
-    // wait for time to be set
-    int retry = 0;
-    const int retry_count = 20;
-
-    time(&time_now);
-    tm_info = localtime(&time_now);
-
-    while (tm_info->tm_year < (2016 - 1900) && ++retry < retry_count) {
-        // ESP_LOGI(tag, "Waiting for system time to be set... (%d/%d)", retry,
-        // retry_count);
-        sprintf(tmp_buff, "Wait %0d/%d", retry, retry_count);
-        cls(0);
-        print_xy(tmp_buff, CENTER, LASTY);
-        flip_frame();
-        vTaskDelay(500 / portTICK_RATE_MS);
-        time(&time_now);
-        tm_info = localtime(&time_now);
-    }
-    if (tm_info->tm_year < (2016 - 1900)) {
-        ESP_LOGI(tag, "System time NOT set.");
-        res = 0;
-    } else {
-        ESP_LOGI(tag, "System time is set.");
-    }
-
-    ESP_ERROR_CHECK(esp_wifi_stop());
-    return res;
-}
-#endif
 
 void app_main() {
     // queue for button presses
+    gpio_set_direction(4,GPIO_MODE_OUTPUT);
+    
     inputQueue = xQueueCreate(4,4);
     ESP_ERROR_CHECK(nvs_flash_init());
     // ===== Set time zone ======
@@ -426,71 +211,109 @@ void app_main() {
     gpio_install_isr_service(0);
     gpio_isr_handler_add(0, gpio_isr_handler, (void*) 0);
     gpio_isr_handler_add(35, gpio_isr_handler, (void*) 35);
-    
-    if (DISPLAY_VOLTAGE) {
-        gpio_set_direction(34, GPIO_MODE_INPUT);
-        // Configure ADC
-        adc1_config_width(ADC_WIDTH_BIT_12);
-        // GPIO34 ADC1 CHANNEL 6
-        adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
-        esp_adc_cal_characteristics_t adc_chars;
-        esp_adc_cal_characterize(
-            (adc_unit_t)ADC_UNIT_1, (adc_atten_t)ADC1_CHANNEL_6,
-            (adc_bits_width_t)ADC_WIDTH_BIT_12, 1100, &adc_chars);
-        vref = adc_chars.vref;
-    }
+    mpu6050_init();
+
     graphics_init();
     cls(0);
     
-#if USE_WIFI
-    // Is time set? If not, tm_year will be (1970 - 1900).
-    if (tm_info->tm_year < (2016 - 1900)) {
-        ESP_LOGI(tag,
-                 "Time is not set yet. Connecting to WiFi and getting time "
-                 "over NTP.");
-        setFontColour(0, 200, 200);
-        setFont(FONT_UBUNTU16);
-        print_xy("Time is not set yet", CENTER, CENTER);
-        print_xy("Connecting to WiFi", CENTER, LASTY + getFontHeight() + 2);
-        print_xy("Getting time over NTP", CENTER, LASTY + getFontHeight() + 2);
-        setFontColour(200, 200, 0);
-        print_xy("Wait", CENTER, LASTY + getFontHeight() + 2);
-        flip_frame();
-        if (obtain_time()) {
-            cls(0);
-            setFontColour(0, 200, 0);
-            print_xy("System time is set.", CENTER, LASTY);
-            flip_frame();
-        } else {
-            cls(0);
-            setFontColour(200, 0, 0);
-            print_xy("ERROR.", CENTER, LASTY);
-            flip_frame();
-        }
-        time(&time_now);
-        vTaskDelay(200);
-        //	update_header(NULL, "");
-        //	Wait(-2000);
-    }
-#endif
     // Initialize the effect displayed
-    if (DISPLAY_IMAGE_WAVE) image_wave_init(COPY_IMAGE_TO_RAM);
     int sel=0;
     while(1) {
         sel=demo_menu(sel);
         switch(sel) {
             case 0:
-                life();
-                break;
-            case 1:
-                display();
-                break;
-            case 2:
-                graphics_demo();
-                break;
+            {
+            strand_t STRAND = {.rmtChannel = 0,
+                .gpioNum = 15,
+                .ledType = LED_WS2812B_V3,
+                .brightLimit = 255,
+                .numPixels = 16, };
+                gpio_set_direction(15, GPIO_MODE_OUTPUT);
+                digitalLeds_initStrands(&STRAND, 1);
+                digitalLeds_resetPixels(&STRAND);
+                int v=0;
+                int delay=100;
+                while (1) {
+                    for (uint16_t i = 0; i < STRAND.numPixels; i++) {
+                        if(i==v) STRAND.pixels[i] = pixelFromRGB(255,0,0);
+                        else STRAND.pixels[i] = pixelFromRGB(0,0,0);
+                    }
+                    v=(v+1)%STRAND.numPixels;
+                    digitalLeds_updatePixels(&STRAND);
+                    ets_delay_us(delay*100);
+                    if(!gpio_get_level(0)) delay--;
+                    if(!gpio_get_level(35)) delay++;
+                    if(delay<0) delay=0;
+                }
+            }
+            break;
+            case 1: 
+            {
+                float xo=7.5,yo=7.5;
+                strand_t STRANDS[] = { 
+                    {.rmtChannel = 0, .gpioNum = 15, .ledType = LED_WS2812B_V3, .brightLimit = 16, .numPixels = 256},
+                };
+                strand_t *pStrand= &STRANDS[0];
+                gpio_set_direction(15, GPIO_MODE_OUTPUT);
+                digitalLeds_initStrands(pStrand, 1);
+                digitalLeds_resetPixels(pStrand);
+                float offset=0;
+                int delay=100;
+                while(1) {
+                    for (uint16_t i = 0; i < pStrand->numPixels; i++) {
+                        int y1 = i / 16;
+                        int x1 = i % 16;
+                        if (y1 % 2) x1 = 15 - x1;
+                        y1 = 15 - y1;
+                        float d =
+                            (sqrt((y1 - yo) * (y1 - yo) + (x1 - xo) * (x1 - xo)) +
+                            offset) /
+                            4.0;
+                        int red=(int)round(4.0*sin(1.0299*d)+4.0);
+                        int green=(int)round(4.0*cos(3.2235*d)+4.0);
+                        int blue=(int)round(4.0*sin(5.1234*d)+4.0);
+                        pStrand->pixels[i] = pixelFromRGB(red/2, green/2, blue/2);
+                    }
+                    digitalLeds_updatePixels(pStrand);
+                    offset-=0.1f;
+                    ets_delay_us(delay*100);
+                    if(!gpio_get_level(0)) delay--;
+                    if(!gpio_get_level(35)) delay++;
+                    if(delay<0) delay=0;
+                }
+            }
+            break;
+            case 2: 
+            {
+                strand_t STRAND = {.rmtChannel = 0,
+                                   .gpioNum = 15,
+                                   .ledType = LED_WS2812B_V3,
+                                   .brightLimit = 16,
+                                   .numPixels = 60,
+                                   .pixels = 0,
+                                   ._stateVars = 0};
+                gpio_set_direction(15, GPIO_MODE_OUTPUT);
+                digitalLeds_initStrands(&STRAND, 1);
+                digitalLeds_resetPixels(&STRAND);
+                int v=0;
+                int delay=100;
+                while (1) {
+                    for (uint16_t i = 0; i < STRAND.numPixels; i++) {
+                        if((i%30)==v) STRAND.pixels[i] = pixelFromRGB(128,(255*v)/30,(255*i)/30);
+                        else STRAND.pixels[i] = pixelFromRGB(0,0,0);;
+                    }
+                    v=(v+1)%30;
+                    digitalLeds_updatePixels(&STRAND);
+                    ets_delay_us(delay*100);
+                    if(!gpio_get_level(0)) delay--;
+                    if(!gpio_get_level(35)) delay++;
+                    if(delay<0) delay=0;
+                }
+            }
+            break;
             case 3:
-                set_orientation(1-get_orientation());
-                break;
+               accelerometer_demo();
+            break;
         }
     }
 }
