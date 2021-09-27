@@ -211,7 +211,7 @@ void app_main() {
     gpio_install_isr_service(0);
     gpio_isr_handler_add(0, gpio_isr_handler, (void*) 0);
     gpio_isr_handler_add(35, gpio_isr_handler, (void*) 35);
-    mpu6050_init();
+  //  mpu6050_init();
 
     graphics_init();
     cls(0);
@@ -235,7 +235,7 @@ void app_main() {
                 int delay=100;
                 while (1) {
                     for (uint16_t i = 0; i < STRAND.numPixels; i++) {
-                        if(i==v) STRAND.pixels[i] = pixelFromRGB(255,0,0);
+                        if(i==v) STRAND.pixels[i] = pixelFromRGB(0,100,200);
                         else STRAND.pixels[i] = pixelFromRGB(0,0,0);
                     }
                     v=(v+1)%STRAND.numPixels;
